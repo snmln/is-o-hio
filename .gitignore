@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm-cache/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Data files (large)
+data/raw/
+data/processed/*.geojson
+!data/processed/.gitkeep
+
+# Generated tiles
+tiles/
+viewer/public/tiles/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.Python
+pip-log.txt
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+*.tmp
+*.temp

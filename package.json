@@ -1,0 +1,35 @@
+{
+  "name": "isometric-ohio",
+  "version": "1.0.0",
+  "description": "Isometric pixel-art style map of OSU campus, inspired by SimCity 2000",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "renderer",
+    "postprocess",
+    "viewer"
+  ],
+  "scripts": {
+    "data:download": "python data/scripts/download_data.py",
+    "data:parse": "python data/scripts/parse_buildings.py",
+    "render": "npm run build -w renderer && npm run render -w renderer",
+    "postprocess": "npm run build -w postprocess && npm run process -w postprocess",
+    "pyramid": "npm run build -w postprocess && npm run pyramid -w postprocess",
+    "dev": "npm run dev -w viewer",
+    "build": "npm run build -w viewer",
+    "preview": "npm run preview -w viewer"
+  },
+  "keywords": [
+    "isometric",
+    "pixel-art",
+    "osu",
+    "campus-map",
+    "simcity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "canvas": "^3.2.1",
+    "playwright": "^1.58.1"
+  }
+}
