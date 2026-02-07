@@ -62,6 +62,86 @@ export const SIMCITY_PALETTE: RGB[] = [
   { r: 75, g: 0, b: 130 },    // Indigo
 ];
 
+// 48-color palette — adds intermediate tones for smoother gradients
+export const SIMCITY_PALETTE_48: RGB[] = [
+  ...SIMCITY_PALETTE,
+
+  // Extra grayscale
+  { r: 32, g: 32, b: 32 },    // Near black
+  { r: 96, g: 96, b: 96 },    // Mid-dark gray
+  { r: 160, g: 160, b: 160 }, // Mid-light gray
+  { r: 224, g: 224, b: 224 }, // Near white
+
+  // Extra browns/tans
+  { r: 160, g: 110, b: 60 },  // Mid brown
+  { r: 196, g: 160, b: 100 }, // Sandy tan
+
+  // Extra greens
+  { r: 60, g: 120, b: 50 },   // Mid green
+  { r: 120, g: 155, b: 60 },  // Yellow-green mid
+
+  // Extra blues
+  { r: 100, g: 150, b: 200 }, // Light steel blue
+  { r: 50, g: 80, b: 160 },   // Medium blue
+
+  // Extra reds/warm
+  { r: 200, g: 80, b: 60 },   // Warm red
+  { r: 160, g: 50, b: 30 },   // Dark brick
+
+  // Extra roof/ground
+  { r: 140, g: 140, b: 130 }, // Warm gray
+  { r: 170, g: 165, b: 150 }, // Light concrete
+  { r: 90, g: 80, b: 70 },    // Dark earth
+  { r: 220, g: 200, b: 160 }, // Pale sand
+];
+
+// 64-color palette — even more tones for subtle gradations
+export const SIMCITY_PALETTE_64: RGB[] = [
+  ...SIMCITY_PALETTE_48,
+
+  // Additional grayscale
+  { r: 48, g: 48, b: 48 },    // Charcoal
+  { r: 176, g: 176, b: 176 }, // Silver
+
+  // Additional browns
+  { r: 120, g: 75, b: 35 },   // Dark brown
+  { r: 230, g: 200, b: 160 }, // Light wheat
+
+  // Additional greens
+  { r: 70, g: 100, b: 40 },   // Dark moss
+  { r: 130, g: 180, b: 100 }, // Light olive
+  { r: 40, g: 80, b: 40 },    // Deep forest
+
+  // Additional blues
+  { r: 80, g: 120, b: 160 },  // Dusty blue
+  { r: 120, g: 170, b: 210 }, // Pale azure
+
+  // Additional warm
+  { r: 220, g: 120, b: 50 },  // Burnt orange
+  { r: 180, g: 60, b: 50 },   // Terra cotta
+  { r: 240, g: 190, b: 100 }, // Light gold
+
+  // Additional neutrals
+  { r: 150, g: 130, b: 110 }, // Warm taupe
+  { r: 200, g: 190, b: 170 }, // Light stone
+  { r: 110, g: 100, b: 90 },  // Dark taupe
+  { r: 80, g: 90, b: 100 },   // Cool dark gray
+];
+
+export type PaletteSize = 32 | 48 | 64 | 'full';
+
+/**
+ * Get a palette by size. Returns null for 'full' (no palette reduction).
+ */
+export function getPalette(size: PaletteSize): RGB[] | null {
+  switch (size) {
+    case 32: return SIMCITY_PALETTE;
+    case 48: return SIMCITY_PALETTE_48;
+    case 64: return SIMCITY_PALETTE_64;
+    case 'full': return null;
+  }
+}
+
 /**
  * Find the nearest color in the palette using Euclidean distance in RGB space.
  */

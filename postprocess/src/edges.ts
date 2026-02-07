@@ -131,10 +131,11 @@ export function addColorBoundaryOutlines(
       checkNeighbor(0, 1);
 
       if (isEdge) {
-        // Darken the pixel instead of replacing it
-        result[i] = Math.max(0, r - 60);
-        result[i + 1] = Math.max(0, g - 60);
-        result[i + 2] = Math.max(0, b - 60);
+        // Blend toward outline color (50% mix) instead of flat subtraction
+        const blend = 0.5;
+        result[i] = Math.round(r * (1 - blend) + outlineColor.r * blend);
+        result[i + 1] = Math.round(g * (1 - blend) + outlineColor.g * blend);
+        result[i + 2] = Math.round(b * (1 - blend) + outlineColor.b * blend);
       }
     }
   }

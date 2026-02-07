@@ -17,8 +17,8 @@ const DATA_PATH = path.join(PROJECT_ROOT, 'data', 'processed', 'osu-buildings.ge
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'tiles', 'raw');
 
 // Tile configuration
-const TILE_SIZE = 512;
-const WORLD_TILE_SIZE = 15; // Scene units per tile
+const TILE_SIZE = 1024;      // Higher resolution (was 512)
+const WORLD_TILE_SIZE = 10;  // Tighter zoom - less world area per tile (was 15)
 
 // Focus bounds (same as canvas renderer)
 const FOCUS_BOUNDS = {

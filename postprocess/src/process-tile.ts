@@ -3,28 +3,38 @@
  */
 
 import sharp from 'sharp';
-import { RGB, SIMCITY_PALETTE } from './palette.js';
-import { orderedDither, BAYER_4X4 } from './dither.js';
+import { RGB, SIMCITY_PALETTE, PaletteSize, getPalette } from './palette.js';
+import { orderedDither, DitherMatrix, BAYER_4X4, BAYER_8X8 } from './dither.js';
 import { addColorBoundaryOutlines } from './edges.js';
 
 export interface ProcessOptions {
-  palette?: RGB[];
-  ditherStrength?: number;
+  paletteSize?: PaletteSize;
+  palette?: RGB[] | null;
+  ditherStrength?: number | null; // null = no dithering
+  ditherMatrix?: 4 | 8;
   addOutlines?: boolean;
   outlineThreshold?: number;
-  downscale?: number; // Factor to downscale before processing (for chunkier pixels)
+  downscale?: number | null; // null or 1 = no downscale
 }
 
 const DEFAULT_OPTIONS: ProcessOptions = {
-  palette: SIMCITY_PALETTE,
+  paletteSize: 32,
   ditherStrength: 24,
+  ditherMatrix: 4,
   addOutlines: true,
   outlineThreshold: 40,
-  downscale: 2, // Downscale to half size, then process, then upscale
+  downscale: 2,
 };
+
+function getDitherMatrix(size: 4 | 8): DitherMatrix {
+  return size === 8 ? BAYER_8X8 : BAYER_4X4;
+}
 
 /**
  * Process a tile image with pixel art effects.
+ *
+ * Processing order: downscale → outlines → dither → upscale
+ * Edge detection runs before dithering so it operates on clean image data.
  */
 export async function processTile(
   inputPath: string,
@@ -32,6 +42,11 @@ export async function processTile(
   options: ProcessOptions = {}
 ): Promise<void> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
+
+  // Resolve palette from paletteSize if not explicitly provided
+  const palette = opts.palette !== undefined
+    ? opts.palette
+    : getPalette(opts.paletteSize!);
 
   // Read the input image
   const image = sharp(inputPath);
@@ -45,9 +60,10 @@ export async function processTile(
   let height = metadata.height;
 
   // Downscale for chunkier pixels
-  if (opts.downscale && opts.downscale > 1) {
-    width = Math.floor(width / opts.downscale);
-    height = Math.floor(height / opts.downscale);
+  const shouldDownscale = opts.downscale && opts.downscale > 1;
+  if (shouldDownscale) {
+    width = Math.floor(width / opts.downscale!);
+    height = Math.floor(height / opts.downscale!);
   }
 
   // Get raw pixel data
@@ -58,17 +74,7 @@ export async function processTile(
 
   let imageData = new Uint8ClampedArray(data);
 
-  // Apply ordered dithering with palette reduction
-  imageData = orderedDither(
-    imageData,
-    info.width,
-    info.height,
-    opts.palette!,
-    opts.ditherStrength!,
-    BAYER_4X4
-  );
-
-  // Add outlines
+  // Step 1: Add outlines BEFORE dithering (edge detection on clean image)
   if (opts.addOutlines) {
     imageData = addColorBoundaryOutlines(
       imageData,
@@ -76,6 +82,19 @@ export async function processTile(
       info.height,
       { r: 32, g: 32, b: 32 },
       opts.outlineThreshold!
+    );
+  }
+
+  // Step 2: Apply ordered dithering with palette reduction
+  if (palette && opts.ditherStrength != null && opts.ditherStrength > 0) {
+    const matrix = getDitherMatrix(opts.ditherMatrix!);
+    imageData = orderedDither(
+      imageData,
+      info.width,
+      info.height,
+      palette,
+      opts.ditherStrength,
+      matrix
     );
   }
 
@@ -89,7 +108,7 @@ export async function processTile(
   });
 
   // Upscale back to original size with nearest neighbor
-  if (opts.downscale && opts.downscale > 1) {
+  if (shouldDownscale) {
     output = output.resize(metadata.width, metadata.height, {
       kernel: 'nearest',
     });
