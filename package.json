@@ -15,10 +15,12 @@
     "render": "npm run build -w renderer && npm run render -w renderer",
     "postprocess": "npm run build -w postprocess && npm run process -w postprocess",
     "pyramid": "npm run build -w postprocess && npm run pyramid -w postprocess",
+    "pyramid:raw": "npm run build -w postprocess && npm run pyramid:raw -w postprocess",
     "dev": "npm run dev -w viewer",
     "build": "npm run build -w viewer",
     "preview": "npm run preview -w viewer"
   },
+  "homepage": "http://snmln.github.io/isometric-ohio",
   "keywords": [
     "isometric",
     "pixel-art",
@@ -31,5 +33,8 @@
   "dependencies": {
     "canvas": "^3.2.1",
     "playwright": "^1.58.1"
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
   }
 }
