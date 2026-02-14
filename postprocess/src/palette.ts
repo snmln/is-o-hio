@@ -50,10 +50,18 @@ export const SIMCITY_PALETTE: RGB[] = [
   { r: 205, g: 198, b: 175 }, // Concrete
   { r: 189, g: 183, b: 165 }, // Sidewalk
 
-  // Roof colors
+  // Roof colors (original)
   { r: 112, g: 128, b: 144 }, // Slate gray
   { r: 72, g: 61, b: 139 },   // Dark slate blue
   { r: 105, g: 105, b: 105 }, // Dim gray
+
+  // Satellite roof colors (asphalt, membrane, metal)
+  { r: 100, g: 100, b: 100 }, // Dark asphalt
+  { r: 140, g: 135, b: 130 }, // Light asphalt
+  { r: 180, g: 160, b: 140 }, // Tan membrane roof
+  { r: 90, g: 75, b: 65 },    // Dark tar roof
+  { r: 200, g: 200, b: 200 }, // Metal roof
+  { r: 160, g: 80, b: 60 },   // Terra cotta
 
   // Accent colors
   { r: 255, g: 215, b: 0 },   // Gold

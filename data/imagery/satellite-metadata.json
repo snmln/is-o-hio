@@ -1,0 +1,13 @@
+{
+  "bounds": {
+    "minLon": -83.026,
+    "maxLon": -83.012,
+    "minLat": 39.996,
+    "maxLat": 40.006
+  },
+  "width": 2048,
+  "height": 2048,
+  "pixelsPerMeter": 1.7154620416686306,
+  "fetchedAt": "2026-02-12T23:13:54.839Z",
+  "source": "USGS NAIP (National Agriculture Imagery Program)"
+}

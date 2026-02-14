@@ -3,6 +3,7 @@ import MapViewer from './components/MapViewer';
 import Controls from './components/Controls';
 import Landmarks from './components/Landmarks';
 import Header from './components/Header';
+import ModelViewer from './components/ModelViewer';
 import './App.css';
 
 interface ViewerState {

@@ -7,7 +7,9 @@
     "render": "node dist/scripts/batch-render.js",
     "render:blender": "node dist/scripts/blender-render.js",
     "render:threejs": "node dist/scripts/batch-render.js",
-    "render:single": "node dist/index.js"
+    "render:single": "node dist/index.js",
+    "fetch:streetview": "node dist/scripts/fetch-streetview.js",
+    "fetch:google-tiles": "node dist/scripts/fetch-google-tiles.js"
   },
   "dependencies": {
     "three": "^0.160.0",
