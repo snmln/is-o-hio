@@ -18,7 +18,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-const INPUT_DIR = path.join(PROJECT_ROOT, 'tiles', 'processed');
+
+// Parse command line args
+const args = process.argv.slice(2);
+const useRaw = args.includes('--raw');
+
+const INPUT_DIR = path.join(PROJECT_ROOT, 'tiles', useRaw ? 'raw' : 'processed');
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'viewer', 'public', 'tiles');
 
 // DZI settings
@@ -39,6 +44,8 @@ interface TileManifest {
 async function main() {
   console.log('Deep Zoom Image Pyramid Generator');
   console.log('=' .repeat(50));
+  console.log(`Source: ${useRaw ? 'raw (geometry only)' : 'processed (with effects)'}`);
+  console.log(`Input: ${INPUT_DIR}`);
 
   // Check input directory
   if (!fs.existsSync(INPUT_DIR)) {
@@ -54,14 +61,93 @@ async function main() {
     process.exit(1);
   }
 
-  const manifest: TileManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  const manifest: any = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
   console.log(`Tile grid: ${manifest.cols}x${manifest.rows} tiles`);
-  console.log(`Tile size: ${manifest.tileSize}px`);
 
-  // Calculate full image dimensions
-  const fullWidth = manifest.cols * manifest.tileSize;
-  const fullHeight = manifest.rows * manifest.tileSize;
-  console.log(`Full image size: ${fullWidth}x${fullHeight}px`);
+  // Check if we have a full render or need to stitch tiles
+  const fullRenderPath = path.join(INPUT_DIR, manifest.fullImage || 'full-render.png');
+  const hasFullRender = fs.existsSync(fullRenderPath);
+
+  let fullWidth: number;
+  let fullHeight: number;
+  let fullImage: Buffer;
+
+  if (hasFullRender) {
+    // Use pre-rendered full image
+    console.log(`Using pre-rendered full image: ${fullRenderPath}`);
+    fullImage = fs.readFileSync(fullRenderPath);
+    const metadata = await sharp(fullImage).metadata();
+    fullWidth = metadata.width!;
+    fullHeight = metadata.height!;
+    console.log(`Full image size: ${fullWidth}x${fullHeight}px`);
+  } else {
+    // Stitch tiles into full image
+    console.log(`Tile size: ${manifest.tileSize}px`);
+    fullWidth = manifest.cols * manifest.tileSize;
+    fullHeight = manifest.rows * manifest.tileSize;
+    console.log(`Full image size: ${fullWidth}x${fullHeight}px (from tiles)`);
+    console.log('\nStitching tiles into composite image...');
+
+    const rowBuffers: Buffer[] = [];
+
+    for (let row = 0; row < manifest.rows; row++) {
+      const rowTiles: Buffer[] = [];
+
+      for (let col = 0; col < manifest.cols; col++) {
+        const tile = manifest.tiles?.find((t: any) => t.col === col && t.row === row);
+        const tilePath = tile ? path.join(INPUT_DIR, tile.filename) : null;
+
+        if (tilePath && fs.existsSync(tilePath)) {
+          rowTiles.push(fs.readFileSync(tilePath));
+        } else {
+          const emptyTile = await sharp({
+            create: {
+              width: manifest.tileSize,
+              height: manifest.tileSize,
+              channels: 3,
+              background: { r: 124, g: 168, b: 74 },
+            },
+          }).png().toBuffer();
+          rowTiles.push(emptyTile);
+        }
+      }
+
+      const rowImages = rowTiles.map((buf, i) => ({
+        input: buf,
+        left: i * manifest.tileSize,
+        top: 0,
+      }));
+
+      const rowBuffer = await sharp({
+        create: {
+          width: fullWidth,
+          height: manifest.tileSize,
+          channels: 3,
+          background: { r: 124, g: 168, b: 74 },
+        },
+      }).composite(rowImages).png().toBuffer();
+
+      rowBuffers.push(rowBuffer);
+      console.log(`  Row ${row + 1}/${manifest.rows} stitched`);
+    }
+
+    const rowComposites = rowBuffers.map((buf, i) => ({
+      input: buf,
+      left: 0,
+      top: i * manifest.tileSize,
+    }));
+
+    fullImage = await sharp({
+      create: {
+        width: fullWidth,
+        height: fullHeight,
+        channels: 3,
+        background: { r: 124, g: 168, b: 74 },
+      },
+    }).composite(rowComposites).png().toBuffer();
+
+    console.log('  Composite created');
+  }
 
   // Create output directories
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -70,45 +156,15 @@ async function main() {
   const dziFilesDir = path.join(OUTPUT_DIR, `${dziName}_files`);
   fs.mkdirSync(dziFilesDir, { recursive: true });
 
+  // Save full composite
+  const fullImagePath = path.join(OUTPUT_DIR, 'full-composite.png');
+  await sharp(fullImage).toFile(fullImagePath);
+  console.log(`Full image saved: ${fullImagePath}`);
+
   // Calculate number of zoom levels
   const maxDimension = Math.max(fullWidth, fullHeight);
   const maxLevel = Math.ceil(Math.log2(maxDimension / DZI_TILE_SIZE));
   console.log(`Zoom levels: 0-${maxLevel}`);
-
-  // Stitch tiles into full image
-  console.log('\nStitching tiles into composite image...');
-
-  // Create composite operation list
-  const compositeOps: sharp.OverlayOptions[] = [];
-
-  for (const tile of manifest.tiles) {
-    const tilePath = path.join(INPUT_DIR, tile.filename);
-    if (!fs.existsSync(tilePath)) {
-      console.warn(`  Warning: Tile not found: ${tile.filename}`);
-      continue;
-    }
-
-    compositeOps.push({
-      input: tilePath,
-      left: tile.col * manifest.tileSize,
-      top: tile.row * manifest.tileSize,
-    });
-  }
-
-  // Create base image and composite all tiles
-  const fullImage = await sharp({
-    create: {
-      width: fullWidth,
-      height: fullHeight,
-      channels: 4,
-      background: { r: 232, g: 228, b: 212, alpha: 255 }, // Background color
-    },
-  })
-    .composite(compositeOps)
-    .png()
-    .toBuffer();
-
-  console.log('  Composite created');
 
   // Generate pyramid levels
   console.log('\nGenerating pyramid levels...');

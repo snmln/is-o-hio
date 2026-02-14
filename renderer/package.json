@@ -5,6 +5,8 @@
   "scripts": {
     "build": "tsc",
     "render": "node dist/scripts/batch-render.js",
+    "render:blender": "node dist/scripts/blender-render.js",
+    "render:threejs": "node dist/scripts/batch-render.js",
     "render:single": "node dist/index.js"
   },
   "dependencies": {
