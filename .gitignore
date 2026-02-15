@@ -12,6 +12,14 @@ data/raw/
 data/processed/*.geojson
 !data/processed/.gitkeep
 
+# Large 3D model files (hosted on GitHub Releases instead)
+*.glb
+*.gltf
+data/google-tiles/*.glb
+data/google-tiles/*.gltf
+viewer/public/tiles/*.glb
+viewer/dist/tiles/*.glb
+
 # Generated tiles
 tiles/
 viewer/public/tiles/

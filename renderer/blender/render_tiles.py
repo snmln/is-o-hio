@@ -153,6 +153,226 @@ def setup_freestyle():
 
 
 # ============================================================================
+# SATELLITE ROOF MATERIAL
+# ============================================================================
+
+def create_satellite_roof_material(name, texture_path, imagery_bounds, scene_data):
+    """
+    Create a material that projects satellite imagery onto roofs based on world position.
+    Uses object coordinates to map XZ position to UV coordinates within imagery bounds.
+    """
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    # Load satellite texture with CLIP extension (no repeat/edge bleeding)
+    tex_image = nodes.new('ShaderNodeTexImage')
+    tex_image.location = (-200, 400)
+    tex_image.extension = 'CLIP'  # Don't repeat, show transparent/black outside bounds
+    try:
+        tex_image.image = bpy.data.images.load(texture_path)
+        tex_image.image.colorspace_settings.name = 'sRGB'
+    except Exception as e:
+        print(f"Warning: Could not load satellite texture: {e}")
+        # Fallback to gray
+        tex_image.image = None
+
+    # Use Object coordinates (world XZ position)
+    tex_coord = nodes.new('ShaderNodeTexCoord')
+    tex_coord.location = (-800, 300)
+
+    # Separate XYZ to get X and Z
+    separate = nodes.new('ShaderNodeSeparateXYZ')
+    separate.location = (-600, 300)
+
+    # Calculate scene coordinate bounds from imagery bounds
+    center_lon = scene_data["centerLon"]
+    center_lat = scene_data["centerLat"]
+    scale = scene_data["scale"]
+    meters_per_deg_lon = 111320 * math.cos(center_lat * math.pi / 180)
+    meters_per_deg_lat = 111320
+
+    # Convert imagery bounds to scene coordinates
+    # Don't swap min/max during conversion - let MapRange handle the inversion
+    img_min_x = (imagery_bounds["minLon"] - center_lon) * meters_per_deg_lon * scale
+    img_max_x = (imagery_bounds["maxLon"] - center_lon) * meters_per_deg_lon * scale
+    img_min_z = -(imagery_bounds["minLat"] - center_lat) * meters_per_deg_lat * scale
+    img_max_z = -(imagery_bounds["maxLat"] - center_lat) * meters_per_deg_lat * scale
+
+    # Map X -> U (0-1 range based on imagery bounds) with clamping
+    map_x = nodes.new('ShaderNodeMapRange')
+    map_x.location = (-400, 400)
+    map_x.clamp = True  # Enable clamping to prevent texture repeat
+    map_x.inputs['From Min'].default_value = img_min_x
+    map_x.inputs['From Max'].default_value = img_max_x
+    map_x.inputs['To Min'].default_value = 0.0
+    map_x.inputs['To Max'].default_value = 1.0
+
+    # Map Z -> V (0-1 range, inverted for image coordinates) with clamping
+    map_z = nodes.new('ShaderNodeMapRange')
+    map_z.location = (-400, 200)
+    map_z.clamp = True  # Enable clamping to prevent texture repeat
+    map_z.inputs['From Min'].default_value = img_min_z
+    map_z.inputs['From Max'].default_value = img_max_z
+    map_z.inputs['To Min'].default_value = 1.0  # Single inversion for correct orientation
+    map_z.inputs['To Max'].default_value = 0.0
+
+    # Combine U and V to UV vector
+    combine = nodes.new('ShaderNodeCombineXYZ')
+    combine.location = (-200, 300)
+
+    # Diffuse BSDF for base lighting
+    diffuse = nodes.new('ShaderNodeBsdfDiffuse')
+    diffuse.location = (0, 400)
+
+    # Shader to RGB for toon effect
+    shader_to_rgb = nodes.new('ShaderNodeShaderToRGB')
+    shader_to_rgb.location = (200, 400)
+
+    # ColorRamp for subtle toon shading (less dramatic than walls)
+    color_ramp = nodes.new('ShaderNodeValToRGB')
+    color_ramp.location = (400, 400)
+    color_ramp.color_ramp.interpolation = 'CONSTANT'
+
+    cr = color_ramp.color_ramp
+    while len(cr.elements) > 2:
+        cr.elements.remove(cr.elements[-1])
+    # Shadow (darkens satellite texture slightly)
+    cr.elements[0].position = 0.0
+    cr.elements[0].color = (0.7, 0.7, 0.7, 1.0)
+    # Midtone (full texture)
+    mid_stop = cr.elements.new(0.25)
+    mid_stop.color = (1.0, 1.0, 1.0, 1.0)
+    # Highlight
+    cr.elements[1].position = 0.8
+    cr.elements[1].color = (1.1, 1.1, 1.1, 1.0)
+
+    # Multiply toon shading with texture
+    mix = nodes.new('ShaderNodeMixRGB')
+    mix.location = (600, 400)
+    mix.blend_type = 'MULTIPLY'
+    mix.inputs['Fac'].default_value = 1.0
+
+    # Final diffuse shader with toon-shaded texture color
+    final_diffuse = nodes.new('ShaderNodeBsdfDiffuse')
+    final_diffuse.location = (800, 400)
+
+    # Output
+    output = nodes.new('ShaderNodeOutputMaterial')
+    output.location = (1000, 400)
+
+    # Connect nodes
+    links.new(tex_coord.outputs['Object'], separate.inputs['Vector'])
+    links.new(separate.outputs['X'], map_x.inputs['Value'])
+    links.new(separate.outputs['Z'], map_z.inputs['Value'])
+    links.new(map_x.outputs['Result'], combine.inputs['X'])
+    links.new(map_z.outputs['Result'], combine.inputs['Y'])
+    links.new(combine.outputs['Vector'], tex_image.inputs['Vector'])
+    links.new(tex_image.outputs['Color'], diffuse.inputs['Color'])
+    links.new(diffuse.outputs['BSDF'], shader_to_rgb.inputs['Shader'])
+    links.new(shader_to_rgb.outputs['Color'], color_ramp.inputs['Fac'])
+    links.new(tex_image.outputs['Color'], mix.inputs['Color1'])
+    links.new(color_ramp.outputs['Color'], mix.inputs['Color2'])
+    links.new(mix.outputs['Color'], final_diffuse.inputs['Color'])
+    links.new(final_diffuse.outputs['BSDF'], output.inputs['Surface'])
+
+    return mat
+
+
+# ============================================================================
+# STREETVIEW WALL MATERIAL
+# ============================================================================
+
+def create_streetview_wall_material(name, texture_path, wall_height):
+    """
+    Create material from street-level image for building wall.
+    Uses planar projection based on wall height.
+    """
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    # Load wall texture with CLIP extension
+    tex_image = nodes.new('ShaderNodeTexImage')
+    tex_image.location = (-400, 300)
+    tex_image.extension = 'CLIP'
+    try:
+        tex_image.image = bpy.data.images.load(texture_path)
+        tex_image.image.colorspace_settings.name = 'sRGB'
+    except Exception as e:
+        print(f"Warning: Could not load streetview texture: {e}")
+        tex_image.image = None
+
+    # Use Generated UV coordinates for planar projection
+    tex_coord = nodes.new('ShaderNodeTexCoord')
+    tex_coord.location = (-800, 300)
+
+    # Mapping node for scale control based on wall height
+    mapping = nodes.new('ShaderNodeMapping')
+    mapping.location = (-600, 300)
+    # Scale UV based on wall height (assume typical building ~10m)
+    scale_factor = max(1.0, wall_height / 10.0)
+    mapping.inputs['Scale'].default_value = (1.0, scale_factor, 1.0)
+
+    # Diffuse BSDF for base lighting
+    diffuse = nodes.new('ShaderNodeBsdfDiffuse')
+    diffuse.location = (-100, 300)
+
+    # Shader to RGB for toon effect
+    shader_to_rgb = nodes.new('ShaderNodeShaderToRGB')
+    shader_to_rgb.location = (100, 300)
+
+    # ColorRamp for subtle toon shading
+    color_ramp = nodes.new('ShaderNodeValToRGB')
+    color_ramp.location = (300, 300)
+    color_ramp.color_ramp.interpolation = 'CONSTANT'
+
+    cr = color_ramp.color_ramp
+    while len(cr.elements) > 2:
+        cr.elements.remove(cr.elements[-1])
+    # Shadow (darkens texture slightly)
+    cr.elements[0].position = 0.0
+    cr.elements[0].color = (0.7, 0.7, 0.7, 1.0)
+    # Midtone (full texture)
+    mid_stop = cr.elements.new(0.3)
+    mid_stop.color = (1.0, 1.0, 1.0, 1.0)
+    # Highlight
+    cr.elements[1].position = 0.8
+    cr.elements[1].color = (1.1, 1.1, 1.1, 1.0)
+
+    # Multiply toon shading with texture
+    mix = nodes.new('ShaderNodeMixRGB')
+    mix.location = (500, 300)
+    mix.blend_type = 'MULTIPLY'
+    mix.inputs['Fac'].default_value = 1.0
+
+    # Final diffuse shader
+    final_diffuse = nodes.new('ShaderNodeBsdfDiffuse')
+    final_diffuse.location = (700, 300)
+
+    # Output
+    output = nodes.new('ShaderNodeOutputMaterial')
+    output.location = (900, 300)
+
+    # Connect nodes
+    links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
+    links.new(mapping.outputs['Vector'], tex_image.inputs['Vector'])
+    links.new(tex_image.outputs['Color'], diffuse.inputs['Color'])
+    links.new(diffuse.outputs['BSDF'], shader_to_rgb.inputs['Shader'])
+    links.new(shader_to_rgb.outputs['Color'], color_ramp.inputs['Fac'])
+    links.new(tex_image.outputs['Color'], mix.inputs['Color1'])
+    links.new(color_ramp.outputs['Color'], mix.inputs['Color2'])
+    links.new(mix.outputs['Color'], final_diffuse.inputs['Color'])
+    links.new(final_diffuse.outputs['BSDF'], output.inputs['Surface'])
+
+    return mat
+
+
+# ============================================================================
 # TOON/CEL SHADER MATERIALS
 # ============================================================================
 
@@ -357,6 +577,130 @@ def create_toon_wall_material_with_windows(name, building_type, colors):
 
 
 # ============================================================================
+# GOOGLE 3D TILES IMPORT
+# ============================================================================
+
+def import_google_tiles(config, scene_data):
+    """
+    Import pre-fetched Google 3D Tiles into the scene.
+
+    Args:
+        config: Dict with modelPath (glTF/OBJ), bounds, and options
+        scene_data: Scene configuration with center/scale
+
+    Returns:
+        List of imported objects
+    """
+    model_path = config.get("modelPath")
+    if not model_path or not os.path.exists(model_path):
+        print(f"Warning: Google Tiles model not found: {model_path}")
+        return []
+
+    print(f"Importing Google 3D Tiles from: {model_path}")
+
+    # Determine file type and import
+    ext = os.path.splitext(model_path)[1].lower()
+    imported_objects = []
+
+    try:
+        # Store existing objects to find new ones after import
+        existing_objects = set(bpy.data.objects.keys())
+
+        if ext == '.glb' or ext == '.gltf':
+            bpy.ops.import_scene.gltf(filepath=model_path)
+        elif ext == '.obj':
+            bpy.ops.wm.obj_import(filepath=model_path)
+        elif ext == '.fbx':
+            bpy.ops.import_scene.fbx(filepath=model_path)
+        else:
+            print(f"Warning: Unsupported format: {ext}")
+            return []
+
+        # Find newly imported objects
+        new_objects = [bpy.data.objects[name] for name in bpy.data.objects.keys()
+                      if name not in existing_objects]
+        imported_objects = [obj for obj in new_objects if obj.type == 'MESH']
+
+        print(f"Imported {len(imported_objects)} mesh objects from Google Tiles")
+
+        # Transform to match scene coordinates
+        if imported_objects and config.get("transform", True):
+            transform_google_tiles(imported_objects, config, scene_data)
+
+        # Apply Freestyle edges for illustrated look
+        if config.get("applyFreestyle", True):
+            for obj in imported_objects:
+                # Add edge split modifier
+                edge_mod = obj.modifiers.new(name="EdgeSplit", type='EDGE_SPLIT')
+                edge_mod.split_angle = math.radians(30)
+
+                # Mark edges for Freestyle
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.select_all(action='SELECT')
+                bpy.ops.mesh.mark_freestyle_edge(clear=False)
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+    except Exception as e:
+        print(f"Error importing Google Tiles: {e}")
+
+    return imported_objects
+
+
+def transform_google_tiles(objects, config, scene_data):
+    """
+    Transform Google Tiles to match scene coordinate system.
+
+    Google Tiles are typically in a local coordinate system that needs
+    to be aligned with our scene's lat/lon based coordinates.
+    """
+    # Get transformation parameters from config
+    tile_bounds = config.get("bounds", {})
+    offset = config.get("offset", [0, 0, 0])
+    scale_factor = config.get("scale", 1.0)
+    rotation = config.get("rotation", [0, 0, 0])
+
+    # Calculate center of tile bounds in scene coordinates
+    if tile_bounds:
+        center_lon = scene_data["centerLon"]
+        center_lat = scene_data["centerLat"]
+        scale = scene_data["scale"]
+        meters_per_deg_lon = 111320 * math.cos(center_lat * math.pi / 180)
+        meters_per_deg_lat = 111320
+
+        tile_center_lon = (tile_bounds.get("minLon", center_lon) +
+                          tile_bounds.get("maxLon", center_lon)) / 2
+        tile_center_lat = (tile_bounds.get("minLat", center_lat) +
+                          tile_bounds.get("maxLat", center_lat)) / 2
+
+        offset_x = (tile_center_lon - center_lon) * meters_per_deg_lon * scale
+        offset_z = -(tile_center_lat - center_lat) * meters_per_deg_lat * scale
+    else:
+        offset_x, offset_z = offset[0], offset[2]
+
+    # Apply transformation to all objects
+    for obj in objects:
+        # Apply rotation (convert degrees to radians if needed)
+        obj.rotation_euler = (
+            math.radians(rotation[0]) if rotation[0] else 0,
+            math.radians(rotation[1]) if rotation[1] else 0,
+            math.radians(rotation[2]) if rotation[2] else 0,
+        )
+
+        # Apply scale
+        obj.scale = (scale_factor, scale_factor, scale_factor)
+
+        # Apply offset
+        obj.location = (
+            obj.location.x + offset_x + offset[0],
+            obj.location.y + offset[1],
+            obj.location.z + offset_z + offset[2],
+        )
+
+    print(f"Transformed Google Tiles: offset=({offset_x:.1f}, 0, {offset_z:.1f}), scale={scale_factor}")
+
+
+# ============================================================================
 # GROUND TEXTURE
 # ============================================================================
 
@@ -488,8 +832,9 @@ def create_tree(location, scale=1.0, style="cluster"):
     trunk = bpy.context.active_object
     trunk.name = "TreeTrunk"
 
-    # Move to trees collection
-    bpy.context.scene.collection.objects.unlink(trunk)
+    # Move to trees collection (handle Blender 5.0+ where object may be in different collection)
+    for coll in trunk.users_collection:
+        coll.objects.unlink(trunk)
     tree_collection.objects.link(trunk)
 
     # Apply trunk material
@@ -521,7 +866,9 @@ def create_tree(location, scale=1.0, style="cluster"):
             sphere = bpy.context.active_object
             sphere.name = f"TreeCanopy_{i}"
 
-            bpy.context.scene.collection.objects.unlink(sphere)
+            # Move to trees collection
+            for coll in sphere.users_collection:
+                coll.objects.unlink(sphere)
             tree_collection.objects.link(sphere)
 
             # Random green color
@@ -546,7 +893,9 @@ def create_tree(location, scale=1.0, style="cluster"):
         cone = bpy.context.active_object
         cone.name = "TreeCanopy"
 
-        bpy.context.scene.collection.objects.unlink(cone)
+        # Move to trees collection
+        for coll in cone.users_collection:
+            coll.objects.unlink(cone)
         tree_collection.objects.link(cone)
 
         green = random.choice(TREE_GREENS)
@@ -704,6 +1053,204 @@ def setup_illustrated_lighting():
 # CYCLES RENDER SETUP
 # ============================================================================
 
+# ============================================================================
+# PIXEL ART COMPOSITOR
+# ============================================================================
+
+def setup_pixel_art_compositor(pixel_scale=4, color_levels=8):
+    """
+    Setup Blender compositor for pixel art effect.
+
+    Creates a node tree that:
+    1. Downscales the render to create chunky pixels
+    2. Applies a pixelate node to remove interpolation
+    3. Posterizes colors for flat color regions
+    4. Upscales back to original resolution with nearest-neighbor
+
+    Args:
+        pixel_scale: Downscale factor (4 = chunky pixels, 2 = finer)
+        color_levels: Number of color bands for posterization (8 = default)
+    """
+    scene = bpy.context.scene
+    scene.use_nodes = True
+    tree = scene.node_tree
+    nodes = tree.nodes
+    links = tree.links
+
+    # Clear existing compositor nodes
+    nodes.clear()
+
+    # ---- Input: Render Layers ----
+    render_layers = nodes.new('CompositorNodeRLayers')
+    render_layers.location = (0, 300)
+
+    # ---- Scale Down (create chunky pixels) ----
+    scale_down = nodes.new('CompositorNodeScale')
+    scale_down.location = (200, 300)
+    scale_down.space = 'RELATIVE'
+    scale_down.inputs['X'].default_value = 1.0 / pixel_scale
+    scale_down.inputs['Y'].default_value = 1.0 / pixel_scale
+
+    # ---- Pixelate Node (removes interpolation artifacts) ----
+    pixelate = nodes.new('CompositorNodePixelate')
+    pixelate.location = (400, 300)
+
+    # ---- Color Posterization via RGB Curves ----
+    # This creates flat color bands for the pixel art look
+    posterize_r = nodes.new('CompositorNodeMath')
+    posterize_r.location = (600, 400)
+    posterize_r.operation = 'MULTIPLY'
+    posterize_r.inputs[1].default_value = color_levels
+
+    round_r = nodes.new('CompositorNodeMath')
+    round_r.location = (800, 400)
+    round_r.operation = 'ROUND'
+
+    divide_r = nodes.new('CompositorNodeMath')
+    divide_r.location = (1000, 400)
+    divide_r.operation = 'DIVIDE'
+    divide_r.inputs[1].default_value = color_levels
+
+    # Separate and combine RGB for color quantization
+    separate_rgb = nodes.new('CompositorNodeSeparateColor')
+    separate_rgb.location = (400, 100)
+    separate_rgb.mode = 'RGB'
+
+    # Process each channel (R, G, B)
+    # Red channel
+    mult_r = nodes.new('CompositorNodeMath')
+    mult_r.location = (600, 200)
+    mult_r.operation = 'MULTIPLY'
+    mult_r.inputs[1].default_value = color_levels
+
+    round_r = nodes.new('CompositorNodeMath')
+    round_r.location = (750, 200)
+    round_r.operation = 'ROUND'
+
+    div_r = nodes.new('CompositorNodeMath')
+    div_r.location = (900, 200)
+    div_r.operation = 'DIVIDE'
+    div_r.inputs[1].default_value = color_levels
+
+    # Green channel
+    mult_g = nodes.new('CompositorNodeMath')
+    mult_g.location = (600, 50)
+    mult_g.operation = 'MULTIPLY'
+    mult_g.inputs[1].default_value = color_levels
+
+    round_g = nodes.new('CompositorNodeMath')
+    round_g.location = (750, 50)
+    round_g.operation = 'ROUND'
+
+    div_g = nodes.new('CompositorNodeMath')
+    div_g.location = (900, 50)
+    div_g.operation = 'DIVIDE'
+    div_g.inputs[1].default_value = color_levels
+
+    # Blue channel
+    mult_b = nodes.new('CompositorNodeMath')
+    mult_b.location = (600, -100)
+    mult_b.operation = 'MULTIPLY'
+    mult_b.inputs[1].default_value = color_levels
+
+    round_b = nodes.new('CompositorNodeMath')
+    round_b.location = (750, -100)
+    round_b.operation = 'ROUND'
+
+    div_b = nodes.new('CompositorNodeMath')
+    div_b.location = (900, -100)
+    div_b.operation = 'DIVIDE'
+    div_b.inputs[1].default_value = color_levels
+
+    # Combine channels back
+    combine_rgb = nodes.new('CompositorNodeCombineColor')
+    combine_rgb.location = (1100, 100)
+    combine_rgb.mode = 'RGB'
+
+    # ---- Scale Up (nearest neighbor to preserve pixels) ----
+    scale_up = nodes.new('CompositorNodeScale')
+    scale_up.location = (1300, 300)
+    scale_up.space = 'RELATIVE'
+    scale_up.inputs['X'].default_value = pixel_scale
+    scale_up.inputs['Y'].default_value = pixel_scale
+
+    # ---- Output ----
+    composite = nodes.new('CompositorNodeComposite')
+    composite.location = (1500, 300)
+
+    # Optional: Viewer node for preview
+    viewer = nodes.new('CompositorNodeViewer')
+    viewer.location = (1500, 100)
+
+    # ---- Connect the nodes ----
+    # Main flow: Render -> Scale Down -> Pixelate
+    links.new(render_layers.outputs['Image'], scale_down.inputs['Image'])
+    links.new(scale_down.outputs['Image'], pixelate.inputs['Color'])
+
+    # Split to RGB channels for posterization
+    links.new(pixelate.outputs['Color'], separate_rgb.inputs['Image'])
+
+    # Red channel posterization
+    links.new(separate_rgb.outputs['Red'], mult_r.inputs[0])
+    links.new(mult_r.outputs['Value'], round_r.inputs[0])
+    links.new(round_r.outputs['Value'], div_r.inputs[0])
+
+    # Green channel posterization
+    links.new(separate_rgb.outputs['Green'], mult_g.inputs[0])
+    links.new(mult_g.outputs['Value'], round_g.inputs[0])
+    links.new(round_g.outputs['Value'], div_g.inputs[0])
+
+    # Blue channel posterization
+    links.new(separate_rgb.outputs['Blue'], mult_b.inputs[0])
+    links.new(mult_b.outputs['Value'], round_b.inputs[0])
+    links.new(round_b.outputs['Value'], div_b.inputs[0])
+
+    # Combine channels
+    links.new(div_r.outputs['Value'], combine_rgb.inputs['Red'])
+    links.new(div_g.outputs['Value'], combine_rgb.inputs['Green'])
+    links.new(div_b.outputs['Value'], combine_rgb.inputs['Blue'])
+    links.new(separate_rgb.outputs['Alpha'], combine_rgb.inputs['Alpha'])
+
+    # Scale up and output
+    links.new(combine_rgb.outputs['Image'], scale_up.inputs['Image'])
+    links.new(scale_up.outputs['Image'], composite.inputs['Image'])
+    links.new(scale_up.outputs['Image'], viewer.inputs['Image'])
+
+    print(f"Pixel art compositor enabled: {pixel_scale}x pixels, {color_levels} color levels")
+
+
+def setup_pixel_art_render_settings():
+    """
+    Configure render settings optimized for pixel-perfect output.
+    Disables anti-aliasing and other effects that blur pixels.
+    """
+    scene = bpy.context.scene
+
+    # Disable anti-aliasing by using minimum pixel filter
+    scene.render.filter_size = 0.01  # Minimum pixel filter for crisp edges
+
+    # Use Standard color transform for accurate colors (not Filmic which adds contrast)
+    scene.view_settings.view_transform = 'Standard'
+    scene.view_settings.look = 'None'
+
+    # Disable effects that could blur the pixel art look
+    scene.render.use_motion_blur = False
+
+    # For Cycles: disable denoising (can blur pixels)
+    if scene.render.engine == 'CYCLES':
+        scene.cycles.use_denoising = False
+
+    # For EEVEE: disable bloom and other post-effects
+    try:
+        scene.eevee.use_bloom = False
+        scene.eevee.use_ssr = False  # Screen space reflections
+        scene.eevee.use_motion_blur = False
+    except AttributeError:
+        pass  # EEVEE settings may vary by version
+
+    print("Pixel art render settings configured (no AA, no blur effects)")
+
+
 def setup_cycles_rendering(samples=128):
     """
     Configure Cycles rendering for quality illustrated output.
@@ -843,8 +1390,23 @@ def create_ground_plane(size=500, illustrated=True):
     return ground
 
 
-def create_building(coords, height, building_type, scene_data, use_windows=True):
-    """Create a building mesh from polygon coordinates with illustrated materials."""
+def create_building(coords, height, building_type, scene_data, use_windows=True,
+                   satellite_config=None, streetview_config=None, building_id=None):
+    """Create a building mesh from polygon coordinates with illustrated materials.
+
+    Args:
+        coords: List of [lon, lat] coordinate pairs
+        height: Building height in meters
+        building_type: Type of building (university, library, etc.)
+        scene_data: Scene configuration with center/scale
+        use_windows: Whether to use procedural window material
+        satellite_config: Optional dict with satellite imagery config:
+            - texturePath: Path to satellite.png
+            - bounds: Dict with minLon, maxLon, minLat, maxLat
+        streetview_config: Optional dict mapping building_id to wall textures:
+            - {building_id: {"north": path, "south": path, ...}}
+        building_id: Optional building ID for streetview texture lookup
+    """
     colors = COLORS.get(building_type, COLORS["default"])
     scaled_height = height * scene_data["scale"] * HEIGHT_SCALE
 
@@ -910,7 +1472,26 @@ def create_building(coords, height, building_type, scene_data, use_windows=True)
     bpy.context.collection.objects.link(obj)
 
     # Create and assign materials (with illustrated toon shading)
-    if use_windows:
+    # Check for streetview wall texture first
+    streetview_wall_path = None
+    if streetview_config and building_id and building_id in streetview_config:
+        # Use first available wall direction (prefer south/east for typical viewing angle)
+        for direction in ['south', 'east', 'north', 'west']:
+            if direction in streetview_config[building_id]:
+                wall_info = streetview_config[building_id][direction]
+                texture_path = wall_info.get('path') if isinstance(wall_info, dict) else wall_info
+                if texture_path and os.path.exists(texture_path):
+                    streetview_wall_path = texture_path
+                    break
+
+    if streetview_wall_path:
+        # Use streetview texture for walls
+        wall_mat = create_streetview_wall_material(
+            f"StreetviewWall_{building_type}_{id(obj)}",
+            streetview_wall_path,
+            height
+        )
+    elif use_windows:
         # Use wall material with procedural windows
         wall_mat = create_toon_wall_material_with_windows(
             f"Wall_{building_type}_{id(obj)}",
@@ -920,7 +1501,16 @@ def create_building(coords, height, building_type, scene_data, use_windows=True)
     else:
         wall_mat = create_toon_material(f"Wall_{building_type}", colors["wall"])
 
-    roof_mat = create_toon_material(f"Roof_{building_type}", colors["roof"])
+    # Roofs: use satellite imagery if available, otherwise toon shading
+    if satellite_config:
+        roof_mat = create_satellite_roof_material(
+            f"SatelliteRoof_{building_type}_{id(obj)}",
+            texture_path=satellite_config["texturePath"],
+            imagery_bounds=satellite_config["bounds"],
+            scene_data=scene_data
+        )
+    else:
+        roof_mat = create_toon_material(f"Roof_{building_type}", colors["roof"])
 
     obj.data.materials.append(wall_mat)
     obj.data.materials.append(roof_mat)
@@ -1223,6 +1813,21 @@ def main():
     tile_size = config.get("tileSize", 512)
     world_tile_size = config.get("worldTileSize", 15)
 
+    # Satellite imagery config (optional)
+    satellite_config = config.get("satelliteConfig", None)
+    if satellite_config:
+        print(f"Satellite imagery enabled: {satellite_config['texturePath']}")
+
+    # Streetview wall texture config (optional)
+    streetview_config = config.get("streetviewConfig", None)
+    if streetview_config:
+        print(f"Streetview wall textures enabled: {len(streetview_config)} buildings")
+
+    # Google 3D Tiles config (optional)
+    google_tiles_config = config.get("googleTilesConfig", None)
+    if google_tiles_config:
+        print(f"Google 3D Tiles enabled: {google_tiles_config.get('modelPath', 'N/A')}")
+
     # Check for illustrated mode (default: true)
     illustrated = "--no-illustrated" not in args
 
@@ -1249,11 +1854,37 @@ def main():
             except ValueError:
                 pass
 
+    # Check for pixel art mode
+    pixel_art_enabled = "--pixel-art" in args
+
+    # Get pixel scale if specified (default: 4)
+    pixel_scale = 4
+    if "--pixel-scale" in args:
+        idx = args.index("--pixel-scale")
+        if idx + 1 < len(args):
+            try:
+                pixel_scale = int(args[idx + 1])
+                pixel_scale = max(1, min(16, pixel_scale))  # Clamp to reasonable range
+            except ValueError:
+                pass
+
+    # Get color levels for posterization (default: 8)
+    color_levels = 8
+    if "--color-levels" in args:
+        idx = args.index("--color-levels")
+        if idx + 1 < len(args):
+            try:
+                color_levels = int(args[idx + 1])
+                color_levels = max(2, min(32, color_levels))  # Clamp to reasonable range
+            except ValueError:
+                pass
+
     print(f"Building count: {len(buildings)}")
     print(f"Output directory: {output_dir}")
     print(f"Render engine: {engine}")
     print(f"Illustrated mode: {illustrated}")
     print(f"Add trees: {add_trees} (count: {tree_count})")
+    print(f"Pixel art mode: {pixel_art_enabled}" + (f" (scale: {pixel_scale}x, colors: {color_levels})" if pixel_art_enabled else ""))
 
     # Setup scene
     print("Setting up scene...")
@@ -1266,19 +1897,35 @@ def main():
 
     create_ground_plane(illustrated=illustrated)
 
-    # Create buildings with illustrated materials
-    print("Creating buildings...")
+    # Import Google 3D Tiles if available (can be used instead of or alongside OSM buildings)
+    google_tiles_objects = []
+    use_osm_buildings = True
+    if google_tiles_config:
+        google_tiles_objects = import_google_tiles(google_tiles_config, scene_data)
+        # If Google Tiles loaded successfully and replaceBuildings is true, skip OSM buildings
+        if google_tiles_objects and google_tiles_config.get("replaceBuildings", False):
+            use_osm_buildings = False
+            print(f"Using Google 3D Tiles (replacing {len(buildings)} OSM buildings)")
+
+    # Create buildings with illustrated materials (unless replaced by Google Tiles)
     building_count = 0
-    for b in buildings:
-        obj = create_building(
-            b["coords"],
-            b["height"],
-            b["type"],
-            scene_data,
-            use_windows=illustrated
-        )
-        if obj:
-            building_count += 1
+    if use_osm_buildings:
+        print("Creating OSM buildings...")
+        for b in buildings:
+            obj = create_building(
+                b["coords"],
+                b["height"],
+                b["type"],
+                scene_data,
+                use_windows=illustrated,
+                satellite_config=satellite_config,
+                streetview_config=streetview_config,
+                building_id=b.get("id")
+            )
+            if obj:
+                building_count += 1
+    else:
+        building_count = len(google_tiles_objects)
 
     print(f"Created {building_count} building meshes")
 
@@ -1409,6 +2056,11 @@ def main():
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
+
+    # Setup pixel art compositor if enabled
+    if pixel_art_enabled:
+        setup_pixel_art_compositor(pixel_scale=pixel_scale, color_levels=color_levels)
+        setup_pixel_art_render_settings()
 
     # Render full image
     print("Rendering full scene...")

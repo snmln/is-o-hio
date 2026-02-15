@@ -19,6 +19,14 @@ const PROJECT_ROOT = path.resolve(RENDERER_ROOT, '..');
 const DATA_PATH = path.join(PROJECT_ROOT, 'data', 'processed', 'osu-buildings.geojson');
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'tiles', 'raw');
 const BLENDER_SCRIPT = path.join(RENDERER_ROOT, 'blender', 'render_tiles.py');
+const IMAGERY_DIR = path.join(PROJECT_ROOT, 'data', 'imagery');
+const SATELLITE_IMAGE = path.join(IMAGERY_DIR, 'satellite.png');
+const SATELLITE_METADATA = path.join(IMAGERY_DIR, 'satellite-metadata.json');
+const STREETVIEW_DIR = path.join(PROJECT_ROOT, 'data', 'streetview');
+const STREETVIEW_MANIFEST = path.join(STREETVIEW_DIR, 'streetview-manifest.json');
+const GOOGLE_TILES_DIR = path.join(PROJECT_ROOT, 'data', 'google-tiles');
+const GOOGLE_TILES_MODEL = path.join(GOOGLE_TILES_DIR, 'google_tiles.glb');
+const GOOGLE_TILES_METADATA = path.join(GOOGLE_TILES_DIR, 'google-tiles-metadata.json');
 
 // Tile configuration (must match Three.js implementation)
 const TILE_SIZE = 512;
@@ -33,6 +41,7 @@ const FOCUS_BOUNDS = {
 };
 
 interface Building {
+  id?: string;
   coords: number[][];
   height: number;
   type: string;
@@ -45,12 +54,138 @@ interface SceneData {
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
 }
 
+interface SatelliteConfig {
+  texturePath: string;
+  bounds: {
+    minLon: number;
+    maxLon: number;
+    minLat: number;
+    maxLat: number;
+  };
+}
+
+interface StreetviewWallInfo {
+  path: string;
+  imageId: string;
+  angle: number;
+}
+
+interface StreetviewConfig {
+  [buildingId: string]: {
+    [direction: string]: StreetviewWallInfo;
+  };
+}
+
+interface GoogleTilesConfig {
+  modelPath: string;
+  bounds?: {
+    minLon: number;
+    maxLon: number;
+    minLat: number;
+    maxLat: number;
+  };
+  replaceBuildings: boolean;
+  applyFreestyle: boolean;
+  transform: boolean;
+  offset?: [number, number, number];
+  scale?: number;
+  rotation?: [number, number, number];
+}
+
 interface BlenderConfig {
   buildings: Building[];
   sceneData: SceneData;
   outputDir: string;
   tileSize: number;
   worldTileSize: number;
+  satelliteConfig?: SatelliteConfig;
+  streetviewConfig?: StreetviewConfig;
+  googleTilesConfig?: GoogleTilesConfig;
+}
+
+/**
+ * Load satellite imagery config if available.
+ */
+function loadSatelliteConfig(): SatelliteConfig | null {
+  if (!fs.existsSync(SATELLITE_IMAGE) || !fs.existsSync(SATELLITE_METADATA)) {
+    return null;
+  }
+
+  try {
+    const metadata = JSON.parse(fs.readFileSync(SATELLITE_METADATA, 'utf-8'));
+    return {
+      texturePath: SATELLITE_IMAGE,
+      bounds: metadata.bounds,
+    };
+  } catch (err) {
+    console.warn('Warning: Could not load satellite metadata:', err);
+    return null;
+  }
+}
+
+/**
+ * Load streetview wall texture config if available.
+ */
+function loadStreetviewConfig(): StreetviewConfig | null {
+  if (!fs.existsSync(STREETVIEW_MANIFEST)) {
+    return null;
+  }
+
+  try {
+    const manifest = JSON.parse(fs.readFileSync(STREETVIEW_MANIFEST, 'utf-8'));
+    const config: StreetviewConfig = {};
+
+    for (const building of manifest.buildings || []) {
+      if (building.buildingId && building.walls) {
+        config[building.buildingId] = building.walls;
+      }
+    }
+
+    return Object.keys(config).length > 0 ? config : null;
+  } catch (err) {
+    console.warn('Warning: Could not load streetview manifest:', err);
+    return null;
+  }
+}
+
+/**
+ * Load Google 3D Tiles config if available.
+ */
+function loadGoogleTilesConfig(replaceBuildings: boolean): GoogleTilesConfig | null {
+  // Check for glTF model first, then OBJ
+  let modelPath: string | null = null;
+
+  if (fs.existsSync(GOOGLE_TILES_MODEL)) {
+    modelPath = GOOGLE_TILES_MODEL;
+  } else {
+    const objPath = path.join(GOOGLE_TILES_DIR, 'google_tiles.obj');
+    if (fs.existsSync(objPath)) {
+      modelPath = objPath;
+    }
+  }
+
+  if (!modelPath) {
+    return null;
+  }
+
+  // Load metadata if available
+  let bounds: GoogleTilesConfig['bounds'] | undefined;
+  if (fs.existsSync(GOOGLE_TILES_METADATA)) {
+    try {
+      const metadata = JSON.parse(fs.readFileSync(GOOGLE_TILES_METADATA, 'utf-8'));
+      bounds = metadata.bounds;
+    } catch {
+      // Ignore metadata errors
+    }
+  }
+
+  return {
+    modelPath,
+    bounds,
+    replaceBuildings,
+    applyFreestyle: true,
+    transform: true,
+  };
 }
 
 /**
@@ -123,7 +258,8 @@ function filterBuildings(geojson: any): Building[] {
         c[1] >= FOCUS_BOUNDS.minLat && c[1] <= FOCUS_BOUNDS.maxLat
       );
     })
-    .map((f: any) => ({
+    .map((f: any, index: number) => ({
+      id: f.properties?.osm_id || `building_${index}`,
       coords: f.geometry.coordinates[0],
       height: Math.max(f.properties.height, 3),
       type: f.properties.building_type || 'default',
@@ -214,8 +350,14 @@ async function runBlender(
 
     proc.stderr.on('data', (data: Buffer) => {
       const text = data.toString().trim();
-      // Filter out common Blender noise
-      if (text && !text.includes('Fra:') && !text.includes('Mem:')) {
+      // Show render progress (Fra: lines show frame progress)
+      if (text.includes('Fra:') && text.includes('Rendering')) {
+        // Extract and show render progress
+        process.stdout.write(`\r  ${text.substring(0, 80)}...`);
+      } else if (text.includes('Mem:') || text.includes('| Time:')) {
+        // Show memory/time info occasionally
+        process.stdout.write(`\r  ${text.substring(0, 80)}   `);
+      } else if (text && !text.includes('Fra:') && !text.includes('Mem:')) {
         console.error(`  Blender stderr: ${text}`);
       }
     });
@@ -289,6 +431,39 @@ async function main() {
     console.log('Cycles samples: 128 (default)');
   }
 
+  // Parse --pixel-art flag for pixel art rendering effect
+  if (args.includes('--pixel-art')) {
+    extraArgs.push('--pixel-art');
+    console.log('Pixel art mode: ENABLED');
+
+    // Parse --pixel-scale N (default: 4)
+    const pixelScaleIdx = args.indexOf('--pixel-scale');
+    if (pixelScaleIdx !== -1 && args[pixelScaleIdx + 1]) {
+      const scale = parseInt(args[pixelScaleIdx + 1], 10);
+      if (!isNaN(scale) && scale >= 1 && scale <= 16) {
+        extraArgs.push('--pixel-scale', scale.toString());
+        console.log(`  Pixel scale: ${scale}x`);
+      }
+    } else {
+      console.log('  Pixel scale: 4x (default)');
+    }
+
+    // Parse --color-levels N (default: 8)
+    const colorLevelsIdx = args.indexOf('--color-levels');
+    if (colorLevelsIdx !== -1 && args[colorLevelsIdx + 1]) {
+      const levels = parseInt(args[colorLevelsIdx + 1], 10);
+      if (!isNaN(levels) && levels >= 2 && levels <= 32) {
+        extraArgs.push('--color-levels', levels.toString());
+        console.log(`  Color levels: ${levels}`);
+      }
+    } else {
+      console.log('  Color levels: 8 (default)');
+    }
+  }
+
+  // Parse --no-satellite (disable satellite textures even if available)
+  const useSatellite = !args.includes('--no-satellite');
+
   console.log(`Render engine: ${engine}`);
 
   // Find Blender
@@ -342,6 +517,51 @@ async function main() {
   // Create output directory
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
+  // Load satellite config if available and enabled
+  let satelliteConfig: SatelliteConfig | null = null;
+  if (useSatellite) {
+    satelliteConfig = loadSatelliteConfig();
+    if (satelliteConfig) {
+      console.log('Satellite imagery: ENABLED');
+      console.log(`  Texture: ${satelliteConfig.texturePath}`);
+    } else {
+      console.log('Satellite imagery: NOT AVAILABLE (run npm run fetch:imagery first)');
+    }
+  } else {
+    console.log('Satellite imagery: DISABLED');
+  }
+
+  // Load streetview config if available (--no-streetview to disable)
+  const useStreetview = !args.includes('--no-streetview');
+  let streetviewConfig: StreetviewConfig | null = null;
+  if (useStreetview) {
+    streetviewConfig = loadStreetviewConfig();
+    if (streetviewConfig) {
+      const buildingCount = Object.keys(streetviewConfig).length;
+      console.log(`Streetview wall textures: ENABLED (${buildingCount} buildings)`);
+    } else {
+      console.log('Streetview wall textures: NOT AVAILABLE (run npm run fetch:streetview first)');
+    }
+  } else {
+    console.log('Streetview wall textures: DISABLED');
+  }
+
+  // Load Google 3D Tiles config if available
+  // --google-tiles: use Google tiles alongside OSM buildings
+  // --google-tiles-only: replace OSM buildings with Google tiles
+  const useGoogleTiles = args.includes('--google-tiles') || args.includes('--google-tiles-only');
+  const replaceWithGoogleTiles = args.includes('--google-tiles-only');
+  let googleTilesConfig: GoogleTilesConfig | null = null;
+  if (useGoogleTiles) {
+    googleTilesConfig = loadGoogleTilesConfig(replaceWithGoogleTiles);
+    if (googleTilesConfig) {
+      console.log(`Google 3D Tiles: ENABLED (${replaceWithGoogleTiles ? 'replacing' : 'alongside'} OSM buildings)`);
+      console.log(`  Model: ${googleTilesConfig.modelPath}`);
+    } else {
+      console.log('Google 3D Tiles: NOT AVAILABLE (run npm run fetch:google-tiles first)');
+    }
+  }
+
   // Write config to temp file
   const config: BlenderConfig = {
     buildings,
@@ -349,6 +569,9 @@ async function main() {
     outputDir: OUTPUT_DIR,
     tileSize: TILE_SIZE,
     worldTileSize: WORLD_TILE_SIZE,
+    ...(satelliteConfig && { satelliteConfig }),
+    ...(streetviewConfig && { streetviewConfig }),
+    ...(googleTilesConfig && { googleTilesConfig }),
   };
 
   const configPath = path.join(os.tmpdir(), `blender-config-${Date.now()}.json`);
