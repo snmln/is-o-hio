@@ -431,6 +431,36 @@ async function main() {
     console.log('Cycles samples: 128 (default)');
   }
 
+  // Parse --pixel-art flag for pixel art rendering effect
+  if (args.includes('--pixel-art')) {
+    extraArgs.push('--pixel-art');
+    console.log('Pixel art mode: ENABLED');
+
+    // Parse --pixel-scale N (default: 4)
+    const pixelScaleIdx = args.indexOf('--pixel-scale');
+    if (pixelScaleIdx !== -1 && args[pixelScaleIdx + 1]) {
+      const scale = parseInt(args[pixelScaleIdx + 1], 10);
+      if (!isNaN(scale) && scale >= 1 && scale <= 16) {
+        extraArgs.push('--pixel-scale', scale.toString());
+        console.log(`  Pixel scale: ${scale}x`);
+      }
+    } else {
+      console.log('  Pixel scale: 4x (default)');
+    }
+
+    // Parse --color-levels N (default: 8)
+    const colorLevelsIdx = args.indexOf('--color-levels');
+    if (colorLevelsIdx !== -1 && args[colorLevelsIdx + 1]) {
+      const levels = parseInt(args[colorLevelsIdx + 1], 10);
+      if (!isNaN(levels) && levels >= 2 && levels <= 32) {
+        extraArgs.push('--color-levels', levels.toString());
+        console.log(`  Color levels: ${levels}`);
+      }
+    } else {
+      console.log('  Color levels: 8 (default)');
+    }
+  }
+
   // Parse --no-satellite (disable satellite textures even if available)
   const useSatellite = !args.includes('--no-satellite');
 

@@ -1053,6 +1053,204 @@ def setup_illustrated_lighting():
 # CYCLES RENDER SETUP
 # ============================================================================
 
+# ============================================================================
+# PIXEL ART COMPOSITOR
+# ============================================================================
+
+def setup_pixel_art_compositor(pixel_scale=4, color_levels=8):
+    """
+    Setup Blender compositor for pixel art effect.
+
+    Creates a node tree that:
+    1. Downscales the render to create chunky pixels
+    2. Applies a pixelate node to remove interpolation
+    3. Posterizes colors for flat color regions
+    4. Upscales back to original resolution with nearest-neighbor
+
+    Args:
+        pixel_scale: Downscale factor (4 = chunky pixels, 2 = finer)
+        color_levels: Number of color bands for posterization (8 = default)
+    """
+    scene = bpy.context.scene
+    scene.use_nodes = True
+    tree = scene.node_tree
+    nodes = tree.nodes
+    links = tree.links
+
+    # Clear existing compositor nodes
+    nodes.clear()
+
+    # ---- Input: Render Layers ----
+    render_layers = nodes.new('CompositorNodeRLayers')
+    render_layers.location = (0, 300)
+
+    # ---- Scale Down (create chunky pixels) ----
+    scale_down = nodes.new('CompositorNodeScale')
+    scale_down.location = (200, 300)
+    scale_down.space = 'RELATIVE'
+    scale_down.inputs['X'].default_value = 1.0 / pixel_scale
+    scale_down.inputs['Y'].default_value = 1.0 / pixel_scale
+
+    # ---- Pixelate Node (removes interpolation artifacts) ----
+    pixelate = nodes.new('CompositorNodePixelate')
+    pixelate.location = (400, 300)
+
+    # ---- Color Posterization via RGB Curves ----
+    # This creates flat color bands for the pixel art look
+    posterize_r = nodes.new('CompositorNodeMath')
+    posterize_r.location = (600, 400)
+    posterize_r.operation = 'MULTIPLY'
+    posterize_r.inputs[1].default_value = color_levels
+
+    round_r = nodes.new('CompositorNodeMath')
+    round_r.location = (800, 400)
+    round_r.operation = 'ROUND'
+
+    divide_r = nodes.new('CompositorNodeMath')
+    divide_r.location = (1000, 400)
+    divide_r.operation = 'DIVIDE'
+    divide_r.inputs[1].default_value = color_levels
+
+    # Separate and combine RGB for color quantization
+    separate_rgb = nodes.new('CompositorNodeSeparateColor')
+    separate_rgb.location = (400, 100)
+    separate_rgb.mode = 'RGB'
+
+    # Process each channel (R, G, B)
+    # Red channel
+    mult_r = nodes.new('CompositorNodeMath')
+    mult_r.location = (600, 200)
+    mult_r.operation = 'MULTIPLY'
+    mult_r.inputs[1].default_value = color_levels
+
+    round_r = nodes.new('CompositorNodeMath')
+    round_r.location = (750, 200)
+    round_r.operation = 'ROUND'
+
+    div_r = nodes.new('CompositorNodeMath')
+    div_r.location = (900, 200)
+    div_r.operation = 'DIVIDE'
+    div_r.inputs[1].default_value = color_levels
+
+    # Green channel
+    mult_g = nodes.new('CompositorNodeMath')
+    mult_g.location = (600, 50)
+    mult_g.operation = 'MULTIPLY'
+    mult_g.inputs[1].default_value = color_levels
+
+    round_g = nodes.new('CompositorNodeMath')
+    round_g.location = (750, 50)
+    round_g.operation = 'ROUND'
+
+    div_g = nodes.new('CompositorNodeMath')
+    div_g.location = (900, 50)
+    div_g.operation = 'DIVIDE'
+    div_g.inputs[1].default_value = color_levels
+
+    # Blue channel
+    mult_b = nodes.new('CompositorNodeMath')
+    mult_b.location = (600, -100)
+    mult_b.operation = 'MULTIPLY'
+    mult_b.inputs[1].default_value = color_levels
+
+    round_b = nodes.new('CompositorNodeMath')
+    round_b.location = (750, -100)
+    round_b.operation = 'ROUND'
+
+    div_b = nodes.new('CompositorNodeMath')
+    div_b.location = (900, -100)
+    div_b.operation = 'DIVIDE'
+    div_b.inputs[1].default_value = color_levels
+
+    # Combine channels back
+    combine_rgb = nodes.new('CompositorNodeCombineColor')
+    combine_rgb.location = (1100, 100)
+    combine_rgb.mode = 'RGB'
+
+    # ---- Scale Up (nearest neighbor to preserve pixels) ----
+    scale_up = nodes.new('CompositorNodeScale')
+    scale_up.location = (1300, 300)
+    scale_up.space = 'RELATIVE'
+    scale_up.inputs['X'].default_value = pixel_scale
+    scale_up.inputs['Y'].default_value = pixel_scale
+
+    # ---- Output ----
+    composite = nodes.new('CompositorNodeComposite')
+    composite.location = (1500, 300)
+
+    # Optional: Viewer node for preview
+    viewer = nodes.new('CompositorNodeViewer')
+    viewer.location = (1500, 100)
+
+    # ---- Connect the nodes ----
+    # Main flow: Render -> Scale Down -> Pixelate
+    links.new(render_layers.outputs['Image'], scale_down.inputs['Image'])
+    links.new(scale_down.outputs['Image'], pixelate.inputs['Color'])
+
+    # Split to RGB channels for posterization
+    links.new(pixelate.outputs['Color'], separate_rgb.inputs['Image'])
+
+    # Red channel posterization
+    links.new(separate_rgb.outputs['Red'], mult_r.inputs[0])
+    links.new(mult_r.outputs['Value'], round_r.inputs[0])
+    links.new(round_r.outputs['Value'], div_r.inputs[0])
+
+    # Green channel posterization
+    links.new(separate_rgb.outputs['Green'], mult_g.inputs[0])
+    links.new(mult_g.outputs['Value'], round_g.inputs[0])
+    links.new(round_g.outputs['Value'], div_g.inputs[0])
+
+    # Blue channel posterization
+    links.new(separate_rgb.outputs['Blue'], mult_b.inputs[0])
+    links.new(mult_b.outputs['Value'], round_b.inputs[0])
+    links.new(round_b.outputs['Value'], div_b.inputs[0])
+
+    # Combine channels
+    links.new(div_r.outputs['Value'], combine_rgb.inputs['Red'])
+    links.new(div_g.outputs['Value'], combine_rgb.inputs['Green'])
+    links.new(div_b.outputs['Value'], combine_rgb.inputs['Blue'])
+    links.new(separate_rgb.outputs['Alpha'], combine_rgb.inputs['Alpha'])
+
+    # Scale up and output
+    links.new(combine_rgb.outputs['Image'], scale_up.inputs['Image'])
+    links.new(scale_up.outputs['Image'], composite.inputs['Image'])
+    links.new(scale_up.outputs['Image'], viewer.inputs['Image'])
+
+    print(f"Pixel art compositor enabled: {pixel_scale}x pixels, {color_levels} color levels")
+
+
+def setup_pixel_art_render_settings():
+    """
+    Configure render settings optimized for pixel-perfect output.
+    Disables anti-aliasing and other effects that blur pixels.
+    """
+    scene = bpy.context.scene
+
+    # Disable anti-aliasing by using minimum pixel filter
+    scene.render.filter_size = 0.01  # Minimum pixel filter for crisp edges
+
+    # Use Standard color transform for accurate colors (not Filmic which adds contrast)
+    scene.view_settings.view_transform = 'Standard'
+    scene.view_settings.look = 'None'
+
+    # Disable effects that could blur the pixel art look
+    scene.render.use_motion_blur = False
+
+    # For Cycles: disable denoising (can blur pixels)
+    if scene.render.engine == 'CYCLES':
+        scene.cycles.use_denoising = False
+
+    # For EEVEE: disable bloom and other post-effects
+    try:
+        scene.eevee.use_bloom = False
+        scene.eevee.use_ssr = False  # Screen space reflections
+        scene.eevee.use_motion_blur = False
+    except AttributeError:
+        pass  # EEVEE settings may vary by version
+
+    print("Pixel art render settings configured (no AA, no blur effects)")
+
+
 def setup_cycles_rendering(samples=128):
     """
     Configure Cycles rendering for quality illustrated output.
@@ -1656,11 +1854,37 @@ def main():
             except ValueError:
                 pass
 
+    # Check for pixel art mode
+    pixel_art_enabled = "--pixel-art" in args
+
+    # Get pixel scale if specified (default: 4)
+    pixel_scale = 4
+    if "--pixel-scale" in args:
+        idx = args.index("--pixel-scale")
+        if idx + 1 < len(args):
+            try:
+                pixel_scale = int(args[idx + 1])
+                pixel_scale = max(1, min(16, pixel_scale))  # Clamp to reasonable range
+            except ValueError:
+                pass
+
+    # Get color levels for posterization (default: 8)
+    color_levels = 8
+    if "--color-levels" in args:
+        idx = args.index("--color-levels")
+        if idx + 1 < len(args):
+            try:
+                color_levels = int(args[idx + 1])
+                color_levels = max(2, min(32, color_levels))  # Clamp to reasonable range
+            except ValueError:
+                pass
+
     print(f"Building count: {len(buildings)}")
     print(f"Output directory: {output_dir}")
     print(f"Render engine: {engine}")
     print(f"Illustrated mode: {illustrated}")
     print(f"Add trees: {add_trees} (count: {tree_count})")
+    print(f"Pixel art mode: {pixel_art_enabled}" + (f" (scale: {pixel_scale}x, colors: {color_levels})" if pixel_art_enabled else ""))
 
     # Setup scene
     print("Setting up scene...")
@@ -1832,6 +2056,11 @@ def main():
 
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
+
+    # Setup pixel art compositor if enabled
+    if pixel_art_enabled:
+        setup_pixel_art_compositor(pixel_scale=pixel_scale, color_levels=color_levels)
+        setup_pixel_art_render_settings()
 
     # Render full image
     print("Rendering full scene...")
