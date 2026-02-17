@@ -12,12 +12,10 @@ data/raw/
 data/processed/*.geojson
 !data/processed/.gitkeep
 
-# Large 3D model files (hosted on GitHub Releases instead)
-*.glb
-*.gltf
+# Large 3D model files (source files, not deployed)
 data/google-tiles/*.glb
 data/google-tiles/*.gltf
-viewer/public/tiles/*.glb
+blender/**/*.glb
 viewer/dist/tiles/*.glb
 
 # Generated tiles (root level only, not viewer/public/tiles which has DZI)
