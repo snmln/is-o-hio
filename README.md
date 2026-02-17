@@ -1,6 +1,6 @@
 # Isometric Ohio
 
-An isometric pixel-art style map of the OSU campus, inspired by SimCity 2000. This is a test
+An isometric pixel-art style map of the OSU campus, inspired by SimCity 2000. Another test
 
 ## Quick Start
 
