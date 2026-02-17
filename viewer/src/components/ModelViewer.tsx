@@ -8,13 +8,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import './ModelViewer.css';
 
 // Local path for the GLB file (used in development and when deployed with the file)
-const LOCAL_MODEL_PATH = './tiles/google_tiles.glb';
-
-// GitHub Releases URL for the optimized GLB file (fallback for GitHub Pages)
-const GITHUB_RELEASES_MODEL_URL = 'https://github.com/snmln/isometric-ohio/releases/download/v1.0-assets/google_tiles.glb';
-
-// Default to local path
-const DEFAULT_MODEL_URL = LOCAL_MODEL_PATH;
+const DEFAULT_MODEL_URL = './tiles/google_tiles.glb';
 
 // Create a 2-tone gradient map for cel-shading
 function createToonGradientMap(): THREE.DataTexture {
@@ -434,9 +428,10 @@ function ModelViewer({ modelPath }: ModelViewerProps) {
           setLoadProgress((progress.loaded / progress.total) * 100);
         }
       },
-      (error: Error) => {
+      (error: unknown) => {
         console.error('Error loading model:', error);
-        setLoadError(`Failed to load 3D model: ${error.message || 'Unknown error'}`);
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        setLoadError(`Failed to load 3D model: ${message}`);
         setIsLoading(false);
       }
     );
