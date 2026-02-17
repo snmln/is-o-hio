@@ -20,9 +20,8 @@ data/google-tiles/*.gltf
 viewer/public/tiles/*.glb
 viewer/dist/tiles/*.glb
 
-# Generated tiles
-tiles/
-viewer/public/tiles/
+# Generated tiles (root level only, not viewer/public/tiles which has DZI)
+/tiles/
 
 # Environment
 .env

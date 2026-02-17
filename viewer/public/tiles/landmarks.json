@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Ohio Stadium",
+    "x": 0.5,
+    "y": 0.5
+  },
+  {
+    "name": "Thompson Library",
+    "x": 0.45,
+    "y": 0.55
+  },
+  {
+    "name": "Ohio Union",
+    "x": 0.55,
+    "y": 0.45
+  },
+  {
+    "name": "The Oval",
+    "x": 0.48,
+    "y": 0.52
+  }
+]
